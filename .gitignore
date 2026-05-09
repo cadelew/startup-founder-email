@@ -1,0 +1,24 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Pipeline outputs (regenerate with the CLI)
+data/raw/items.jsonl
+data/normalized/items.jsonl
+data/enriched/items.jsonl
+data/generated/items.jsonl
+data/validated/items.jsonl
+data/exported/*.csv
+data/logs/
+
+# Local Firecrawl self-host checkout (large; clone separately if needed)
+firecrawl/

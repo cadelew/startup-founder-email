@@ -1,0 +1,4 @@
+# Small offline fixture list for validation tests and demos.
+mailinator.com
+tempmail.com
+example-disposable.test

@@ -1,0 +1,15 @@
+{
+  "url": "https://analytical-engines.example",
+  "fetched_at_iso": "2026-05-05T20:00:00Z",
+  "statusCode": 200,
+  "markdown": "# Analytical Engines\n\nAnalytical Engines builds workflow tools for scientific computing teams.\n\nFounders: Ada Lovelace, CTO and Charles Babbage, CEO\n\nContact: hello@analytical-engines.example",
+  "html": "<html><body><h1>Analytical Engines</h1><a href=\"mailto:hello@analytical-engines.example\">Email us</a></body></html>",
+  "links": [
+    "https://analytical-engines.example/about",
+    "mailto:hello@analytical-engines.example"
+  ],
+  "metadata": {
+    "title": "Analytical Engines",
+    "sourceURL": "https://analytical-engines.example"
+  }
+}

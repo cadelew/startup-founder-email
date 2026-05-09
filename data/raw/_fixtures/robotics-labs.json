@@ -1,0 +1,15 @@
+{
+  "url": "https://robotics-labs.example",
+  "fetched_at_iso": "2026-05-05T20:05:00Z",
+  "statusCode": 200,
+  "markdown": "# Robotics Labs\n\nRobotics Labs helps warehouse teams deploy autonomous inventory robots.\n\nFounders: Grace Hopper, CEO\n\nWebsite: https://robotics-labs.example",
+  "html": "<html><body><h1>Robotics Labs</h1><p>Warehouse robotics software.</p></body></html>",
+  "links": [
+    "https://robotics-labs.example/company",
+    "https://robotics-labs.example/contact"
+  ],
+  "metadata": {
+    "title": "Robotics Labs",
+    "sourceURL": "https://robotics-labs.example"
+  }
+}

@@ -28,6 +28,7 @@ class FirecrawlPageRecord:
     html: str | None
     links: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict[str, Any] = field(default_factory=dict)
+    llm_extraction: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

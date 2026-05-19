@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from startup_founder_email.config import EmailInferenceConfig
 from startup_founder_email.jsonl_io import iter_jsonl_records, write_jsonl_records
@@ -13,7 +12,10 @@ from startup_founder_email.models import (
     NormalizedFounderRecord,
 )
 from startup_founder_email.pipeline import PipelineContext
-from startup_founder_email.text_normalization import normalize_visible_text
+from startup_founder_email.text_normalization import (
+    normalize_email_token,
+    normalize_visible_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -172,14 +174,6 @@ def build_email_pattern_tokens(
         "f": first_name[:1],
         "l": last_name[:1],
     }
-
-
-def normalize_email_token(value: str | None) -> str:
-    """Normalize a name token for use in an email local part."""
-
-    if not value:
-        return ""
-    return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
 def choose_best_email_guess(

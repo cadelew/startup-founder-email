@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import urllib.error
+import urllib.request
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from startup_founder_email.config import ValidationConfig
 from startup_founder_email.jsonl_io import iter_jsonl_records, write_jsonl_records
@@ -70,11 +74,27 @@ def validate_contact_candidate(
     )
     is_disposable_domain = has_disposable_domain(email_address, disposable_domains)
     mx_provider_known = contact_candidate_record.mx_provider_name is not None
+    smtp_probe_status = "skipped"
+    smtp_probe_notes: tuple[str, ...] = ()
+
+    if validation_config.enable_reacher_http_validation and syntax_valid and email_address:
+        try:
+            smtp_probe_status, smtp_probe_notes = probe_reacher_http_validation(
+                validation_config,
+                email_address,
+            )
+        except RuntimeError as error:
+            logger.warning(str(error))
+            smtp_probe_status = "error"
+            smtp_probe_notes = ("smtp_probe_http_error",)
+
     validation_notes = build_validation_notes(
         syntax_valid,
         is_role_address,
         is_disposable_domain,
         mx_provider_known,
+        smtp_probe_status,
+        smtp_probe_notes,
     )
 
     if validation_config.enable_smtp_probe:
@@ -86,7 +106,7 @@ def validate_contact_candidate(
         is_role_address=is_role_address,
         is_disposable_domain=is_disposable_domain,
         mx_provider_known=mx_provider_known,
-        smtp_probe_status="skipped",
+        smtp_probe_status=smtp_probe_status,
         validation_notes=validation_notes,
     )
 
@@ -139,6 +159,8 @@ def build_validation_notes(
     is_role_address: bool,
     is_disposable_domain: bool,
     mx_provider_known: bool,
+    smtp_probe_status: str,
+    smtp_probe_notes: tuple[str, ...] = (),
 ) -> tuple[str, ...]:
     """Build readable validation notes."""
 
@@ -151,8 +173,80 @@ def build_validation_notes(
         validation_notes.append("disposable_domain")
     if not mx_provider_known:
         validation_notes.append("mx_unknown_offline")
-    validation_notes.append("smtp_skipped_offline")
+    if smtp_probe_status == "skipped":
+        validation_notes.append("smtp_skipped_offline")
+    validation_notes.extend(smtp_probe_notes)
     return tuple(validation_notes)
+
+
+def probe_reacher_http_validation(
+    validation_config: ValidationConfig,
+    email_address: str,
+) -> tuple[str, tuple[str, ...]]:
+    """Call Reacher's HTTP API and map response fields to status/notes."""
+
+    reacher_payload = post_reacher_check_email_request(
+        validation_config,
+        email_address,
+    )
+    return map_reacher_payload_to_smtp_status(reacher_payload)
+
+
+def post_reacher_check_email_request(
+    validation_config: ValidationConfig,
+    email_address: str,
+) -> dict[str, Any]:
+    """POST one email to Reacher `/v0/check_email` and parse the response."""
+
+    request_body = json.dumps({"to_email": email_address}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{validation_config.reacher_base_url.rstrip('/')}/v0/check_email",
+        data=request_body,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=validation_config.reacher_timeout_seconds,
+        ) as response:
+            response_payload = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ValueError) as error:
+        raise RuntimeError(f"Reacher HTTP probe failed for {email_address}: {error}") from error
+
+    if not isinstance(response_payload, dict):
+        raise RuntimeError("Reacher returned a non-object JSON response.")
+    return response_payload
+
+
+def map_reacher_payload_to_smtp_status(
+    reacher_payload: dict[str, Any],
+) -> tuple[str, tuple[str, ...]]:
+    """Map Reacher HTTP response fields to `smtp_probe_status` and notes."""
+
+    smtp_payload = reacher_payload.get("smtp")
+    if not isinstance(smtp_payload, dict):
+        return "error", ("smtp_probe_response_missing_smtp",)
+
+    is_catch_all = bool(smtp_payload.get("is_catch_all"))
+    is_disabled = bool(smtp_payload.get("is_disabled"))
+    has_full_inbox = bool(smtp_payload.get("has_full_inbox"))
+    is_deliverable = smtp_payload.get("is_deliverable")
+    can_connect_smtp = smtp_payload.get("can_connect_smtp")
+
+    if is_catch_all:
+        return "catch_all", ("smtp_probe_catch_all",)
+    if is_disabled:
+        return "undeliverable", ("smtp_probe_mailbox_disabled",)
+    if has_full_inbox:
+        return "undeliverable", ("smtp_probe_inbox_full",)
+    if is_deliverable is True:
+        return "deliverable", ("smtp_probe_deliverable",)
+    if is_deliverable is False:
+        return "undeliverable", ("smtp_probe_undeliverable",)
+    if can_connect_smtp is False:
+        return "error", ("smtp_probe_connection_failed",)
+    return "error", ("smtp_probe_inconclusive",)
 
 
 def read_disposable_domains(disposable_domains_path: Path | None) -> set[str]:

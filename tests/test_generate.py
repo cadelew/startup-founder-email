@@ -12,6 +12,32 @@ from startup_founder_email.stages.generate import (
 )
 
 
+def test_infer_email_addresses_transliterates_accented_founder_names() -> None:
+    normalized_founder_record = NormalizedFounderRecord(
+        company_name="Tex Software",
+        batch_name=None,
+        industry_name=None,
+        company_website_url="https://texsoftware.com/team",
+        raw_company_description="Example",
+        founder_full_name="Federico Chávez-Torres",
+        founder_first_name="Federico",
+        founder_last_name="Chávez-Torres",
+        founder_role_title="Founder, CEO",
+        founder_linkedin_url=None,
+        source_url="https://texsoftware.com/team",
+        public_email_address=None,
+        public_email_source_type="",
+    )
+
+    email_addresses = infer_email_addresses(
+        normalized_founder_record,
+        "texsoftware.com",
+        ("{first}.{last}",),
+    )
+
+    assert email_addresses == ["federico.chaveztorres@texsoftware.com"]
+
+
 def test_infer_email_addresses_uses_configured_patterns() -> None:
     normalized_founder_record = build_normalized_founder_record()
 

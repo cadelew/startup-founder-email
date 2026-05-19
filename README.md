@@ -18,7 +18,7 @@ This makes the pipeline easier to debug, rerun, and learn from.
 
 ## Current status
 
-Phase 1 is implemented:
+Implemented so far:
 
 - project scaffolding
 - CLI entrypoint
@@ -26,15 +26,65 @@ Phase 1 is implemented:
 - config loading
 - logging setup
 - output directory management
+- fixture-based collection
+- optional live Firecrawl scraping through `/v1/scrape` (optional `formats: json` / LLM extraction when Firecrawl has AI configured)
+- normalization, enrichment, generation, validation, and CSV export
 
-The collection and transformation steps are wired into the CLI but are not yet implemented.
+Fixture mode is the default so the pipeline can run without network access.
 
 ## Quick start
 
 ```bash
-PYTHONPATH=src python3 -m startup_founder_email --help
-PYTHONPATH=src python3 -m startup_founder_email collect --help
+python -m startup_founder_email --project-root . collect
+python -m startup_founder_email --project-root . normalize
+python -m startup_founder_email --project-root . enrich
+python -m startup_founder_email --project-root . generate
+python -m startup_founder_email --project-root . validate
+python -m startup_founder_email --project-root . export
 ```
+
+To collect live pages with a local Firecrawl server:
+
+```bash
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_MODE=live
+export FIRECRAWL_BASE_URL=http://localhost:3002
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_URLS=https://example.com,https://example.org
+python -m startup_founder_email --project-root . collect
+```
+
+When Firecrawl is set up with Ollama or another LLM (see `firecrawl/.env`), you can enable adaptive structured founder extraction. The collector first scrapes markdown/HTML/links; if cheap signals indicate the deterministic parser may struggle (for example no founder signal or nav-heavy markdown), it makes a second scrape with Firecrawl JSON extraction. Raw JSON is stored on each record as `llm_extraction`, and `normalize` prefers those founders when the array is non-empty:
+
+```bash
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_JSON_EXTRACT=true
+# Optional: override HTTP timeout (seconds) for slow local models
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_LLM_TIMEOUT_SECONDS=180
+python -m startup_founder_email --project-root . collect
+```
+
+To enable opt-in live email verification with Reacher HTTP backend during `validate`:
+
+```bash
+# In a separate terminal, run Reacher (requires outbound SMTP connectivity)
+docker run --rm -p 8080:8080 reacherhq/backend:latest
+
+# In your pipeline terminal:
+export STARTUP_FOUNDER_EMAIL_REACHER_ENABLE=true
+export STARTUP_FOUNDER_EMAIL_REACHER_BASE_URL=http://localhost:8080
+export STARTUP_FOUNDER_EMAIL_REACHER_TIMEOUT_SECONDS=20
+python -m startup_founder_email --project-root . validate
+```
+
+Validation behavior with Reacher enabled:
+
+- `smtp_probe_status` values:
+  - `deliverable` when Reacher reports deliverable mailbox.
+  - `undeliverable` when mailbox is disabled/full or explicitly non-deliverable.
+  - `catch_all` when domain accepts all recipients.
+  - `error` on probe transport/parsing failures.
+  - `skipped` when probe is not attempted (for example feature disabled or invalid syntax).
+- `validation_notes` keeps offline checks and adds probe notes such as
+  `smtp_probe_deliverable`, `smtp_probe_undeliverable`, `smtp_probe_catch_all`,
+  or `smtp_probe_http_error`.
 
 ## Project layout
 
@@ -211,12 +261,15 @@ through every stage call.
 
 ### `src/startup_founder_email/stages/collect.py`
 
-This file is reserved for Phase 2.
+This file handles raw page collection.
 
 Important functions:
 
 - `run_collection_stage(context)`
-  Will fetch publicly accessible YC company data and save raw artifacts for later parsing.
+  Saves raw Firecrawl-shaped page records to `data/raw/items.jsonl`.
+
+- `collect_live_firecrawl_page_records(...)`
+  Scrapes configured target URLs through Firecrawl's synchronous `/v1/scrape` endpoint.
 
 Why it matters:
 

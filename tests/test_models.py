@@ -29,6 +29,7 @@ def test_firecrawl_page_record_defaults_optional_collections() -> None:
 
     assert firecrawl_page_record.links == ()
     assert firecrawl_page_record.metadata == {}
+    assert firecrawl_page_record.llm_extraction is None
 
 
 def test_contact_candidate_record_defaults_tracking_fields() -> None:

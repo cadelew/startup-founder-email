@@ -5,6 +5,7 @@ from startup_founder_email.jsonl_io import iter_jsonl_records, write_jsonl_recor
 from startup_founder_email.models import ContactCandidateRecord
 from startup_founder_email.pipeline import build_pipeline_context
 from startup_founder_email.stages.validate import (
+    map_reacher_payload_to_smtp_status,
     choose_email_address_to_validate,
     has_role_local_part,
     is_syntax_valid,
@@ -50,6 +51,112 @@ def test_validate_contact_candidate_sets_offline_flags(tmp_path: Path) -> None:
     assert validated_record.is_role_address is True
     assert validated_record.is_disposable_domain is True
     assert validated_record.smtp_probe_status == "skipped"
+
+
+def test_validate_contact_candidate_runs_reacher_probe_when_enabled(monkeypatch) -> None:
+    contact_candidate_record = build_contact_candidate_record(best_email_guess="ada@example.com")
+    validation_config = ValidationConfig(
+        enable_reacher_http_validation=True,
+        reacher_base_url="http://localhost:8080",
+        reacher_timeout_seconds=20.0,
+        disposable_domains_path=None,
+    )
+
+    monkeypatch.setattr(
+        "startup_founder_email.stages.validate.post_reacher_check_email_request",
+        lambda _validation_config, _email: {
+            "smtp": {
+                "is_deliverable": True,
+                "is_disabled": False,
+                "has_full_inbox": False,
+                "is_catch_all": False,
+                "can_connect_smtp": True,
+            }
+        },
+    )
+
+    validated_record = validate_contact_candidate(
+        contact_candidate_record,
+        validation_config,
+        set(),
+    )
+
+    assert validated_record.smtp_probe_status == "deliverable"
+    assert "smtp_probe_deliverable" in validated_record.validation_notes
+    assert "smtp_skipped_offline" not in validated_record.validation_notes
+
+
+def test_validate_contact_candidate_sets_error_when_reacher_http_fails(monkeypatch) -> None:
+    contact_candidate_record = build_contact_candidate_record(best_email_guess="ada@example.com")
+    validation_config = ValidationConfig(
+        enable_reacher_http_validation=True,
+        reacher_base_url="http://localhost:8080",
+        reacher_timeout_seconds=20.0,
+        disposable_domains_path=None,
+    )
+
+    def raise_http_error(_validation_config, _email):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(
+        "startup_founder_email.stages.validate.post_reacher_check_email_request",
+        raise_http_error,
+    )
+
+    validated_record = validate_contact_candidate(
+        contact_candidate_record,
+        validation_config,
+        set(),
+    )
+
+    assert validated_record.smtp_probe_status == "error"
+    assert "smtp_probe_http_error" in validated_record.validation_notes
+
+
+def test_validate_contact_candidate_skips_reacher_probe_for_invalid_syntax(monkeypatch) -> None:
+    contact_candidate_record = build_contact_candidate_record(best_email_guess="invalid-email")
+    validation_config = ValidationConfig(
+        enable_reacher_http_validation=True,
+        reacher_base_url="http://localhost:8080",
+        reacher_timeout_seconds=20.0,
+        disposable_domains_path=None,
+    )
+    called = {"count": 0}
+
+    def fake_post_reacher(_validation_config, _email):
+        called["count"] += 1
+        return {}
+
+    monkeypatch.setattr(
+        "startup_founder_email.stages.validate.post_reacher_check_email_request",
+        fake_post_reacher,
+    )
+
+    validated_record = validate_contact_candidate(
+        contact_candidate_record,
+        validation_config,
+        set(),
+    )
+
+    assert called["count"] == 0
+    assert validated_record.syntax_valid is False
+    assert validated_record.smtp_probe_status == "skipped"
+
+
+def test_map_reacher_payload_to_smtp_status_handles_catch_all() -> None:
+    status, notes = map_reacher_payload_to_smtp_status(
+        {
+            "smtp": {
+                "is_catch_all": True,
+                "is_deliverable": True,
+                "is_disabled": False,
+                "has_full_inbox": False,
+            }
+        }
+    )
+
+    assert status == "catch_all"
+    assert notes == ("smtp_probe_catch_all",)
 
 
 def test_choose_email_address_to_validate_falls_back_to_public_email() -> None:

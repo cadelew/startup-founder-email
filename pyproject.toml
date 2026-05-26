@@ -17,6 +17,17 @@ dependencies = []
 dev = [
   "pytest>=8.0.0",
 ]
+api = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "pydantic>=2.0.0",
+]
+enrichment = [
+  "dnspython>=2.0.0",
+]
+
+[project.scripts]
+startup-founder-email-api = "startup_founder_email.api_server:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

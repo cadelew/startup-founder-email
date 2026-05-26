@@ -270,6 +270,7 @@ def read_normalized_founder_records(
             founder_role_title=read_optional_string(record.get("founder_role_title")),
             founder_linkedin_url=read_optional_string(record.get("founder_linkedin_url")),
             source_url=str(record.get("source_url", "")),
+            seed_url=read_optional_string(record.get("seed_url")),
             public_email_address=read_optional_string(record.get("public_email_address")),
             public_email_source_type=str(record.get("public_email_source_type", "")),
             cleaning_notes=tuple(read_string_items(record.get("cleaning_notes"))),

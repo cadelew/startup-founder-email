@@ -46,7 +46,9 @@ def run_normalization_stage(context: PipelineContext) -> int:
     """Normalize raw pages into founder records."""
 
     raw_page_records = read_raw_page_records(context)
-    normalized_founder_records = normalize_raw_page_records(raw_page_records)
+    normalized_founder_records = dedupe_normalized_founders(
+        normalize_raw_page_records(raw_page_records)
+    )
     output_path = context.config.output_directories.normalized_directory / "items.jsonl"
     write_jsonl_records(output_path, normalized_founder_records)
 
@@ -72,6 +74,8 @@ def read_raw_page_records(context: PipelineContext) -> list[FirecrawlPageRecord]
             links=tuple(read_string_items(record.get("links"))),
             metadata=read_mapping(record.get("metadata")),
             llm_extraction=read_optional_mapping(record.get("llm_extraction")),
+            seed_url=read_optional_string(record.get("seed_url")),
+            crawl_id=read_optional_string(record.get("crawl_id")),
         )
         for record in iter_jsonl_records(input_path)
     ]
@@ -86,6 +90,72 @@ def normalize_raw_page_records(
     for raw_page_record in raw_page_records:
         normalized_founder_records.extend(normalize_raw_page_record(raw_page_record))
     return normalized_founder_records
+
+
+def dedupe_normalized_founders(
+    normalized_founder_records: list[NormalizedFounderRecord],
+) -> list[NormalizedFounderRecord]:
+    """Keep one founder row per company group, preferring the richest source page."""
+
+    best_by_key: dict[tuple[str, str], NormalizedFounderRecord] = {}
+    for founder_record in normalized_founder_records:
+        if not founder_record.founder_full_name.strip():
+            continue
+        dedupe_key = build_founder_dedupe_key(founder_record)
+        existing_record = best_by_key.get(dedupe_key)
+        if existing_record is None or founder_record_rank(
+            founder_record
+        ) > founder_record_rank(existing_record):
+            best_by_key[dedupe_key] = founder_record
+    return list(best_by_key.values())
+
+
+def build_founder_dedupe_key(founder_record: NormalizedFounderRecord) -> tuple[str, str]:
+    """Build a stable deduplication key for one founder within one startup."""
+
+    company_key = (
+        founder_record.seed_url
+        or founder_record.company_website_url
+        or founder_record.company_name
+    ).strip().lower()
+    founder_name_key = founder_record.founder_full_name.strip().lower()
+    return company_key, founder_name_key
+
+
+def founder_record_rank(founder_record: NormalizedFounderRecord) -> int:
+    """Score founder rows so dedupe keeps the most useful source page."""
+
+    score = 0
+    if founder_record.public_email_address:
+        score += 100
+    if "founder_source_firecrawl_json" in founder_record.cleaning_notes:
+        score += 50
+    if page_path_looks_founder_relevant(founder_record.source_url):
+        score += 30
+    if founder_record.raw_company_description:
+        score += min(len(founder_record.raw_company_description), 200)
+    return score
+
+
+def page_path_looks_founder_relevant(page_url: str) -> bool:
+    """Return whether a page URL path likely contains team or about content."""
+
+    lowered_url = page_url.lower()
+    founder_path_markers = (
+        "/team",
+        "/about",
+        "/leadership",
+        "/people",
+        "/founders",
+        "/company",
+    )
+    return any(marker in lowered_url for marker in founder_path_markers)
+
+
+def resolve_company_website_url(raw_page_record: FirecrawlPageRecord) -> str | None:
+    """Prefer the crawl seed URL as the company website when available."""
+
+    return raw_page_record.seed_url or raw_page_record.url
 
 
 def normalize_raw_page_record(
@@ -263,7 +333,7 @@ def build_founder_record(
         company_name=company_name,
         batch_name=None,
         industry_name=None,
-        company_website_url=raw_page_record.url,
+        company_website_url=resolve_company_website_url(raw_page_record),
         raw_company_description=company_description,
         founder_full_name=founder_name,
         founder_first_name=founder_first_name,
@@ -271,6 +341,7 @@ def build_founder_record(
         founder_role_title=founder_role_title,
         founder_linkedin_url=founder_linkedin_url,
         source_url=raw_page_record.url,
+        seed_url=raw_page_record.seed_url,
         public_email_address=public_email_address,
         public_email_source_type=public_email_source_type,
         cleaning_notes=cleaning_notes,
@@ -307,7 +378,7 @@ def build_unknown_founder_record(
         company_name=company_name,
         batch_name=None,
         industry_name=None,
-        company_website_url=raw_page_record.url,
+        company_website_url=resolve_company_website_url(raw_page_record),
         raw_company_description=company_description,
         founder_full_name="",
         founder_first_name=None,
@@ -315,6 +386,7 @@ def build_unknown_founder_record(
         founder_role_title=None,
         founder_linkedin_url=None,
         source_url=raw_page_record.url,
+        seed_url=raw_page_record.seed_url,
         public_email_address=public_email_address,
         public_email_source_type=public_email_source_type,
         cleaning_notes=("founder_not_found",),

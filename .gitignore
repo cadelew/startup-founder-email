@@ -19,6 +19,10 @@ data/generated/items.jsonl
 data/validated/items.jsonl
 data/exported/*.csv
 data/logs/
+data/jobs/
+data/exported/contact_overrides.json
+frontend/node_modules/
+frontend/dist/
 
 # Local Firecrawl self-host checkout (large; clone separately if needed)
 firecrawl/

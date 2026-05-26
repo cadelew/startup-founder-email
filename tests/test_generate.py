@@ -151,5 +151,5 @@ def build_enrichment_record(
         final_website_url=final_website_url,
         has_mx_records=False,
         mx_provider_name=None,
-        enrichment_notes=("mx_skipped_offline",),
+        enrichment_notes=("mx_not_found",),
     )

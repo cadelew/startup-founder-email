@@ -27,8 +27,12 @@ Implemented so far:
 - logging setup
 - output directory management
 - fixture-based collection
-- optional live Firecrawl scraping through `/v1/scrape` (optional `formats: json` / LLM extraction when Firecrawl has AI configured)
-- normalization, enrichment, generation, validation, and CSV export
+- optional live Firecrawl **scrape** (`/v1/scrape`) or **crawl** (`/v1/crawl`) per startup seed URL
+- optional `formats: json` / LLM extraction when Firecrawl has AI configured
+- seeds CSV input (`data/seeds/startup_urls.example.csv`)
+- normalization with cross-page founder dedupe after crawls
+- enrichment, generation, validation, and CSV export
+- FastAPI job API + React UI for running jobs and reviewing contacts
 
 Fixture mode is the default so the pipeline can run without network access.
 
@@ -52,6 +56,28 @@ export STARTUP_FOUNDER_EMAIL_FIRECRAWL_URLS=https://example.com,https://example.
 python -m startup_founder_email --project-root . collect
 ```
 
+To **crawl** each startup site (recommended — discovers `/team`, `/about`, etc.):
+
+```bash
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_MODE=live
+export FIRECRAWL_BASE_URL=http://localhost:3002
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_COLLECTION_MODE=crawl
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_URLS=https://texsoftware.com
+# Optional: limit pages per site (default 20)
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_CRAWL_LIMIT=20
+python -m startup_founder_email --project-root . collect
+```
+
+Or load seeds from CSV:
+
+```bash
+cp data/seeds/startup_urls.example.csv data/seeds/startup_urls.csv
+export STARTUP_FOUNDER_EMAIL_SEEDS_CSV=data/seeds/startup_urls.csv
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_MODE=live
+export STARTUP_FOUNDER_EMAIL_FIRECRAWL_COLLECTION_MODE=crawl
+python -m startup_founder_email --project-root . collect
+```
+
 When Firecrawl is set up with Ollama or another LLM (see `firecrawl/.env`), you can enable adaptive structured founder extraction. The collector first scrapes markdown/HTML/links; if cheap signals indicate the deterministic parser may struggle (for example no founder signal or nav-heavy markdown), it makes a second scrape with Firecrawl JSON extraction. Raw JSON is stored on each record as `llm_extraction`, and `normalize` prefers those founders when the array is non-empty:
 
 ```bash
@@ -59,6 +85,13 @@ export STARTUP_FOUNDER_EMAIL_FIRECRAWL_JSON_EXTRACT=true
 # Optional: override HTTP timeout (seconds) for slow local models
 export STARTUP_FOUNDER_EMAIL_FIRECRAWL_LLM_TIMEOUT_SECONDS=180
 python -m startup_founder_email --project-root . collect
+```
+
+To enable DNS MX lookups during `enrich`, install the enrichment extra:
+
+```bash
+pip install -e ".[enrichment]"
+python -m startup_founder_email --project-root . enrich
 ```
 
 To enable opt-in live email verification with Reacher HTTP backend during `validate`:
@@ -86,6 +119,27 @@ Validation behavior with Reacher enabled:
   `smtp_probe_deliverable`, `smtp_probe_undeliverable`, `smtp_probe_catch_all`,
   or `smtp_probe_http_error`.
 
+## Web UI (API + React)
+
+Install API dependencies and start the backend:
+
+```bash
+pip install -e ".[api,enrichment]"
+startup-founder-email-api --project-root .
+```
+
+In another terminal, start the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` to paste seed URLs, run crawl/collect jobs, run the pipeline, and edit exported contacts.
+
+VC portfolio discovery (YC, Sequoia, etc.) is planned but deferred — see [docs/DISCOVER.md](docs/DISCOVER.md).
+
 ## Project layout
 
 ```text
@@ -94,19 +148,34 @@ src/startup_founder_email/
   __main__.py
   cli.py
   config.py
+  job_config.py
   logging_utils.py
   models.py
   paths.py
   pipeline.py
+  seeds.py
   stages/
+  api/
+    main.py
+    job_store.py
+    worker.py
+    contacts_service.py
+    routes/
+frontend/
+  src/
+    App.tsx
+    api.ts
 tests/
 data/
-  raw/
+  raw/          ← CLI pipeline artifacts
   normalized/
   enriched/
   generated/
   exported/
   logs/
+  jobs/         ← per-job artifacts (API pipeline, gitignored)
+  seeds/
+docs/
 ```
 
 ## Codebase tour
@@ -269,7 +338,8 @@ Important functions:
   Saves raw Firecrawl-shaped page records to `data/raw/items.jsonl`.
 
 - `collect_live_firecrawl_page_records(...)`
-  Scrapes configured target URLs through Firecrawl's synchronous `/v1/scrape` endpoint.
+  Scrapes or crawls configured target URLs through Firecrawl (`/v1/scrape` or `/v1/crawl`).
+  Crawl mode discovers linked pages under paths like `/team` and `/about` automatically.
 
 Why it matters:
 
@@ -278,12 +348,14 @@ cleaning or enrichment happens.
 
 ### `src/startup_founder_email/stages/normalize.py`
 
-This file is reserved for Phase 3.
+This file converts raw Firecrawl pages into clean founder rows.
 
 Important functions:
 
 - `run_normalization_stage(context)`
-  Will convert raw source records into cleaned founder/company rows with stable fields.
+  Parses markdown and HTML for founder names and roles, prefers LLM JSON extraction
+  when present, deduplicates across crawled pages, and writes rows to
+  `data/normalized/items.jsonl` (or the per-job path when called via the API).
 
 Why it matters:
 
@@ -291,26 +363,31 @@ This is where messy source data becomes predictable enough for downstream proces
 
 ### `src/startup_founder_email/stages/enrich.py`
 
-This file is reserved for Phase 4.
+This file adds domain and MX metadata to normalized rows.
 
 Important functions:
 
 - `run_enrichment_stage(context)`
-  Will add canonical-domain, redirect, and MX metadata to normalized rows.
+  Canonicalizes company domains, performs DNS MX lookups via `dnspython` when
+  installed (falls back gracefully when not), and classifies the MX provider
+  (Google, Microsoft, Fastmail, etc.).
 
 Why it matters:
 
 Enrichment is a separate concern from collection. It adds external facts to already-clean data.
+Real MX results flow forward so `validate.py` can set `mx_provider_known=True` and
+remove the `mx_unknown_offline` note from the final CSV.
 
 ### `src/startup_founder_email/stages/generate.py`
 
-This file is reserved for Phase 5.
+This file generates contact candidates from normalized founder rows and enrichment data.
 
 Important functions:
 
 - `run_contact_generation_stage(context)`
-  Will prefer public emails when present, otherwise generate ranked work-email guesses
-  and a short company summary for outreach drafting.
+  Prefers public emails when present, otherwise generates ranked work-email guesses
+  using patterns like `{first}.{last}@domain`. Joins enrichment records by
+  `(company_name, company_website_url)` to attach domain and MX metadata.
 
 Why it matters:
 
@@ -318,12 +395,13 @@ This stage turns structured company/founder data into contact candidates you can
 
 ### `src/startup_founder_email/stages/export.py`
 
-This file is reserved for Phase 6.
+This file writes the final outreach CSV.
 
 Important functions:
 
 - `run_export_stage(context)`
-  Will write the final review CSV and any operator-friendly outputs.
+  Reads validated contact candidates and writes a stable-column
+  `contacts.csv` with all fields the UI and overrides system expect.
 
 Why it matters:
 

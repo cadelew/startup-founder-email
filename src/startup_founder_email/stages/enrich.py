@@ -45,6 +45,7 @@ def read_normalized_founder_records(
             founder_role_title=read_optional_string(record.get("founder_role_title")),
             founder_linkedin_url=read_optional_string(record.get("founder_linkedin_url")),
             source_url=str(record.get("source_url", "")),
+            seed_url=read_optional_string(record.get("seed_url")),
             public_email_address=read_optional_string(record.get("public_email_address")),
             public_email_source_type=str(record.get("public_email_source_type", "")),
             cleaning_notes=tuple(read_string_items(record.get("cleaning_notes"))),
@@ -73,21 +74,27 @@ def enrich_normalized_founder_records(
 def enrich_normalized_founder_record(
     normalized_founder_record: NormalizedFounderRecord,
 ) -> DomainEnrichmentRecord:
-    """Build offline enrichment metadata for one normalized record."""
+    """Build enrichment metadata for one normalized record."""
 
     final_website_url = normalized_founder_record.company_website_url
     canonical_company_domain = canonicalize_company_domain(final_website_url)
-    enrichment_notes = ("mx_skipped_offline",)
     if canonical_company_domain is None:
-        enrichment_notes = ("domain_not_found", "mx_skipped_offline")
+        has_mx_records = False
+        mx_provider_name = None
+        enrichment_notes = ("domain_not_found", "mx_not_found")
+    else:
+        has_mx_records, mx_provider_name, mx_lookup_note = lookup_mx_records(
+            canonical_company_domain
+        )
+        enrichment_notes = (mx_lookup_note,)
 
     return DomainEnrichmentRecord(
         company_name=normalized_founder_record.company_name,
         raw_company_description=normalized_founder_record.raw_company_description,
         canonical_company_domain=canonical_company_domain,
         final_website_url=final_website_url,
-        has_mx_records=False,
-        mx_provider_name=None,
+        has_mx_records=has_mx_records,
+        mx_provider_name=mx_provider_name,
         enrichment_notes=enrichment_notes,
     )
 
@@ -107,6 +114,53 @@ def canonicalize_company_domain(website_url: str | None) -> str | None:
     if lowercase_hostname.startswith("www."):
         return lowercase_hostname[4:]
     return lowercase_hostname
+
+
+def lookup_mx_records(domain: str) -> tuple[bool, str | None, str]:
+    """Look up MX records and return presence, provider, and a note."""
+
+    try:
+        import dns.resolver
+    except ImportError:
+        return False, None, "mx_lookup_unavailable"
+
+    try:
+        answers = dns.resolver.resolve(domain, "MX", lifetime=5.0)
+        best_answer = min(answers, key=lambda answer: int(answer.preference))
+    except Exception as error:  # noqa: BLE001 - DNS resolvers expose many failure types
+        logger.info("MX lookup failed for %s: %s", domain, error)
+        return False, None, "mx_not_found"
+
+    mx_hostname = str(best_answer.exchange).rstrip(".").lower()
+    if not mx_hostname:
+        return False, None, "mx_not_found"
+    return True, classify_mx_provider(mx_hostname), "mx_lookup_ok"
+
+
+def classify_mx_provider(mx_hostname: str) -> str:
+    """Map common MX hosts to readable provider names."""
+
+    hostname = mx_hostname.lower().rstrip(".")
+    provider_suffixes = {
+        "aspmx.l.google.com": "google",
+        "googlemail.com": "google",
+        "google.com": "google",
+        "mail.protection.outlook.com": "microsoft",
+        "outlook.com": "microsoft",
+        "hotmail.com": "microsoft",
+        "messagingengine.com": "fastmail",
+        "zoho.com": "zoho",
+        "protonmail.ch": "proton",
+        "protonmail.com": "proton",
+        "amazonses.com": "amazon_ses",
+        "mailgun.org": "mailgun",
+        "sendgrid.net": "sendgrid",
+        "secureserver.net": "godaddy",
+    }
+    for suffix, provider_name in provider_suffixes.items():
+        if hostname == suffix or hostname.endswith(f".{suffix}"):
+            return provider_name
+    return hostname
 
 
 def read_optional_string(value: object) -> str | None:

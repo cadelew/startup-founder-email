@@ -1,8 +1,10 @@
 from startup_founder_email.jsonl_io import iter_jsonl_records, write_jsonl_records
 from startup_founder_email.models import FirecrawlPageRecord
 from startup_founder_email.pipeline import build_pipeline_context
+from startup_founder_email.models import NormalizedFounderRecord
 from startup_founder_email.stages.normalize import (
     classify_public_email_source_type,
+    dedupe_normalized_founders,
     extract_founder_segments,
     extract_public_email_address,
     normalize_raw_page_record,
@@ -217,3 +219,47 @@ def test_run_normalization_stage_writes_normalized_jsonl(tmp_path) -> None:
     assert normalized_records[0]["company_name"] == "Robotics Labs"
     assert normalized_records[0]["founder_full_name"] == "Grace Hopper"
     assert normalized_records[0]["public_email_source_type"] == ""
+
+
+def test_dedupe_normalized_founders_prefers_team_page_with_email() -> None:
+    seed_url = "https://example.com"
+    home_page_record = NormalizedFounderRecord(
+        company_name="Example",
+        batch_name=None,
+        industry_name=None,
+        company_website_url=seed_url,
+        raw_company_description="Short.",
+        founder_full_name="Ada Lovelace",
+        founder_first_name="Ada",
+        founder_last_name="Lovelace",
+        founder_role_title="CEO",
+        founder_linkedin_url=None,
+        source_url="https://example.com/",
+        seed_url=seed_url,
+        public_email_address=None,
+        public_email_source_type="",
+        cleaning_notes=(),
+    )
+    team_page_record = NormalizedFounderRecord(
+        company_name="Example",
+        batch_name=None,
+        industry_name=None,
+        company_website_url=seed_url,
+        raw_company_description="Example builds tools for operators.",
+        founder_full_name="Ada Lovelace",
+        founder_first_name="Ada",
+        founder_last_name="Lovelace",
+        founder_role_title="CEO",
+        founder_linkedin_url=None,
+        source_url="https://example.com/team",
+        seed_url=seed_url,
+        public_email_address="ada@example.com",
+        public_email_source_type="person",
+        cleaning_notes=("founder_source_firecrawl_json",),
+    )
+
+    deduped_records = dedupe_normalized_founders([home_page_record, team_page_record])
+
+    assert len(deduped_records) == 1
+    assert deduped_records[0].source_url == "https://example.com/team"
+    assert deduped_records[0].public_email_address == "ada@example.com"

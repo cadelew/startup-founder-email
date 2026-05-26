@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
@@ -91,7 +92,13 @@ def collect_live_firecrawl_page_records(
     firecrawl_config: FirecrawlConfig,
     request_timeout_seconds: float,
 ) -> list[FirecrawlPageRecord]:
-    """Collect page records by scraping configured target URLs with Firecrawl."""
+    """Collect page records from configured seed URLs using scrape or crawl mode."""
+
+    if firecrawl_config.collection_mode == "crawl":
+        return collect_live_firecrawl_crawl_records(
+            firecrawl_config,
+            request_timeout_seconds,
+        )
 
     scrape_timeout_seconds = resolve_firecrawl_scrape_timeout_seconds(
         firecrawl_config,
@@ -105,6 +112,232 @@ def collect_live_firecrawl_page_records(
         )
         for target_url in firecrawl_config.target_urls
     ]
+
+
+def collect_live_firecrawl_crawl_records(
+    firecrawl_config: FirecrawlConfig,
+    request_timeout_seconds: float,
+) -> list[FirecrawlPageRecord]:
+    """Crawl each seed URL with Firecrawl and return one record per discovered page."""
+
+    crawl_timeout_seconds = max(
+        request_timeout_seconds,
+        firecrawl_config.crawl_timeout_seconds,
+    )
+    firecrawl_page_records: list[FirecrawlPageRecord] = []
+    for seed_url in firecrawl_config.target_urls:
+        logger.info("Starting Firecrawl crawl for seed URL: %s", seed_url)
+        firecrawl_page_records.extend(
+            crawl_firecrawl_seed_url(
+                firecrawl_config,
+                seed_url,
+                crawl_timeout_seconds,
+            )
+        )
+    return firecrawl_page_records
+
+
+def crawl_firecrawl_seed_url(
+    firecrawl_config: FirecrawlConfig,
+    seed_url: str,
+    crawl_timeout_seconds: float,
+) -> list[FirecrawlPageRecord]:
+    """Run one Firecrawl crawl job for a seed URL and return page records."""
+
+    crawl_response = post_firecrawl_crawl_request(
+        firecrawl_config,
+        seed_url,
+        crawl_timeout_seconds,
+    )
+    crawl_id = read_string(crawl_response.get("id"))
+    if not crawl_id:
+        raise RuntimeError(f"Firecrawl crawl did not return an id: {crawl_response}")
+
+    page_payloads = poll_firecrawl_crawl_until_complete(
+        firecrawl_config,
+        crawl_id,
+        crawl_timeout_seconds,
+    )
+    fetched_at_iso = current_utc_timestamp()
+    return crawl_results_to_page_records(
+        seed_url=seed_url,
+        crawl_id=crawl_id,
+        page_payloads=page_payloads,
+        fetched_at_iso=fetched_at_iso,
+    )
+
+
+def post_firecrawl_crawl_request(
+    firecrawl_config: FirecrawlConfig,
+    seed_url: str,
+    request_timeout_seconds: float,
+) -> dict[str, Any]:
+    """POST a crawl request to Firecrawl and return the decoded JSON response."""
+
+    request_body = json.dumps(
+        build_firecrawl_crawl_request_body(firecrawl_config, seed_url)
+    ).encode("utf-8")
+    return firecrawl_json_request(
+        firecrawl_config,
+        method="POST",
+        path="/v1/crawl",
+        request_body=request_body,
+        request_timeout_seconds=request_timeout_seconds,
+        error_context=f"Firecrawl crawl failed for {seed_url}",
+    )
+
+
+def poll_firecrawl_crawl_until_complete(
+    firecrawl_config: FirecrawlConfig,
+    crawl_id: str,
+    crawl_timeout_seconds: float,
+) -> list[dict[str, Any]]:
+    """Poll a crawl job until it completes or times out."""
+
+    deadline = time.monotonic() + crawl_timeout_seconds
+    while time.monotonic() < deadline:
+        status_response = get_firecrawl_crawl_status(
+            firecrawl_config,
+            crawl_id,
+            min(firecrawl_config.crawl_poll_interval_seconds, crawl_timeout_seconds),
+        )
+        status = read_string(status_response.get("status")) or ""
+        if status == "completed":
+            return read_firecrawl_crawl_pages(status_response)
+        if status == "failed":
+            raise RuntimeError(f"Firecrawl crawl {crawl_id} failed: {status_response}")
+
+        logger.info(
+            "Firecrawl crawl %s status=%s completed=%s total=%s",
+            crawl_id,
+            status,
+            status_response.get("completed"),
+            status_response.get("total"),
+        )
+        time.sleep(firecrawl_config.crawl_poll_interval_seconds)
+
+    raise RuntimeError(
+        f"Firecrawl crawl {crawl_id} timed out after {crawl_timeout_seconds} seconds"
+    )
+
+
+def get_firecrawl_crawl_status(
+    firecrawl_config: FirecrawlConfig,
+    crawl_id: str,
+    request_timeout_seconds: float,
+) -> dict[str, Any]:
+    """GET crawl job status from Firecrawl."""
+
+    return firecrawl_json_request(
+        firecrawl_config,
+        method="GET",
+        path=f"/v1/crawl/{crawl_id}",
+        request_body=None,
+        request_timeout_seconds=request_timeout_seconds,
+        error_context=f"Firecrawl crawl status failed for {crawl_id}",
+    )
+
+
+def read_firecrawl_crawl_pages(status_response: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract crawled page payloads from a completed crawl status response."""
+
+    data = status_response.get("data")
+    if isinstance(data, list):
+        return [page for page in data if isinstance(page, dict)]
+    return []
+
+
+def crawl_results_to_page_records(
+    *,
+    seed_url: str,
+    crawl_id: str,
+    page_payloads: list[dict[str, Any]],
+    fetched_at_iso: str,
+) -> list[FirecrawlPageRecord]:
+    """Convert Firecrawl crawl page payloads into pipeline page records."""
+
+    page_records: list[FirecrawlPageRecord] = []
+    for page_payload in page_payloads:
+        page_payload = dict(page_payload)
+        page_payload.setdefault("fetched_at_iso", fetched_at_iso)
+        page_payload["seed_url"] = seed_url
+        page_payload["crawl_id"] = crawl_id
+        page_records.append(build_firecrawl_page_record(page_payload))
+    return page_records
+
+
+def build_firecrawl_crawl_request_body(
+    firecrawl_config: FirecrawlConfig,
+    seed_url: str,
+) -> dict[str, Any]:
+    """Build the JSON body for ``POST /v1/crawl``."""
+
+    body: dict[str, Any] = {
+        "url": seed_url,
+        "limit": firecrawl_config.crawl_limit,
+        "scrapeOptions": build_firecrawl_scrape_options(firecrawl_config),
+    }
+    if firecrawl_config.crawl_include_paths:
+        body["includePaths"] = list(firecrawl_config.crawl_include_paths)
+    if firecrawl_config.crawl_exclude_paths:
+        body["excludePaths"] = list(firecrawl_config.crawl_exclude_paths)
+    return body
+
+
+def build_firecrawl_scrape_options(firecrawl_config: FirecrawlConfig) -> dict[str, Any]:
+    """Build scrape options embedded in crawl requests."""
+
+    scrape_options: dict[str, Any] = {
+        "formats": ["markdown", "html", "links"],
+    }
+    if firecrawl_config.scrape_json_extract:
+        scrape_options["formats"] = ["markdown", "html", "links", "json"]
+        scrape_options["jsonOptions"] = {
+            "schema": _FIRECRAWL_FOUNDER_JSON_SCHEMA,
+            "prompt": _FIRECRAWL_FOUNDER_JSON_PROMPT,
+        }
+    return scrape_options
+
+
+def firecrawl_json_request(
+    firecrawl_config: FirecrawlConfig,
+    *,
+    method: str,
+    path: str,
+    request_body: bytes | None,
+    request_timeout_seconds: float,
+    error_context: str,
+) -> dict[str, Any]:
+    """Send a JSON request to Firecrawl and decode the response object."""
+
+    request = urllib.request.Request(
+        f"{firecrawl_config.base_url.rstrip('/')}{path}",
+        data=request_body,
+        headers=build_firecrawl_request_headers(firecrawl_config),
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=request_timeout_seconds,
+        ) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as error:
+        response_body = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"{error_context}: HTTP {error.code} {response_body}"
+        ) from error
+    except urllib.error.URLError as error:
+        raise RuntimeError(
+            f"Could not connect to Firecrawl at {firecrawl_config.base_url}: {error.reason}"
+        ) from error
+
+    decoded_payload = json.loads(response_body)
+    if not isinstance(decoded_payload, dict):
+        raise RuntimeError("Firecrawl returned a non-object JSON response.")
+    if decoded_payload.get("success") is False:
+        raise RuntimeError(f"{error_context}: {decoded_payload}")
+    return decoded_payload
 
 
 def resolve_firecrawl_scrape_timeout_seconds(
@@ -366,6 +599,8 @@ def build_firecrawl_page_record(firecrawl_payload: dict[str, Any]) -> FirecrawlP
         links=links,
         metadata=metadata,
         llm_extraction=read_llm_extraction_payload(firecrawl_payload),
+        seed_url=read_optional_string(firecrawl_payload.get("seed_url")),
+        crawl_id=read_optional_string(firecrawl_payload.get("crawl_id")),
     )
 
 

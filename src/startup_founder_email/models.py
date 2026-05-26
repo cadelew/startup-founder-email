@@ -29,6 +29,8 @@ class FirecrawlPageRecord:
     links: tuple[str, ...] = field(default_factory=tuple)
     metadata: dict[str, Any] = field(default_factory=dict)
     llm_extraction: dict[str, Any] | None = None
+    seed_url: str | None = None
+    crawl_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,7 @@ class NormalizedFounderRecord:
     founder_role_title: str | None
     founder_linkedin_url: str | None
     source_url: str
+    seed_url: str | None = None
     public_email_address: str | None = None
     public_email_source_type: str = ""
     cleaning_notes: tuple[str, ...] = field(default_factory=tuple)

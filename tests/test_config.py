@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from startup_founder_email.config import (
+    build_job_output_directory_config,
     load_pipeline_config,
     read_firecrawl_target_urls,
     read_optional_float_environment_variable,
@@ -9,7 +10,7 @@ from startup_founder_email.config import (
 
 
 def test_load_pipeline_config_builds_expected_output_directories() -> None:
-    project_root = Path("/tmp/example-project")
+    project_root = Path("/tmp/example-project").resolve()
 
     pipeline_config = load_pipeline_config(project_root)
 
@@ -26,6 +27,19 @@ def test_load_pipeline_config_builds_expected_output_directories() -> None:
     assert pipeline_config.validation.enable_reacher_http_validation is False
     assert pipeline_config.validation.reacher_base_url == "http://localhost:8080"
     assert pipeline_config.validation.reacher_timeout_seconds == 20.0
+
+
+def test_build_job_output_directory_config_scopes_outputs_to_job_id() -> None:
+    project_root = Path("/tmp/example-project").resolve()
+
+    output_directories = build_job_output_directory_config(project_root, "job-123")
+
+    assert output_directories.raw_directory == project_root / "data" / "jobs" / "job-123" / "raw"
+    assert (
+        output_directories.exported_directory
+        == project_root / "data" / "jobs" / "job-123" / "exported"
+    )
+    assert output_directories.logs_directory == project_root / "data" / "jobs" / "job-123" / "logs"
 
 
 def test_load_pipeline_config_reads_firecrawl_json_extract_environment(monkeypatch) -> None:
@@ -82,6 +96,31 @@ def test_load_pipeline_config_reads_reacher_validation_environment(monkeypatch) 
     assert pipeline_config.validation.enable_reacher_http_validation is True
     assert pipeline_config.validation.reacher_base_url == "http://localhost:18080"
     assert pipeline_config.validation.reacher_timeout_seconds == 45.0
+
+
+def test_load_pipeline_config_reads_crawl_collection_mode(monkeypatch) -> None:
+    monkeypatch.setenv("STARTUP_FOUNDER_EMAIL_FIRECRAWL_COLLECTION_MODE", "crawl")
+    monkeypatch.setenv("STARTUP_FOUNDER_EMAIL_FIRECRAWL_CRAWL_LIMIT", "15")
+
+    pipeline_config = load_pipeline_config(Path("/tmp/example-project"))
+
+    assert pipeline_config.firecrawl.collection_mode == "crawl"
+    assert pipeline_config.firecrawl.crawl_limit == 15
+
+
+def test_load_pipeline_config_reads_seeds_csv(tmp_path, monkeypatch) -> None:
+    seeds_csv_path = tmp_path / "data" / "seeds" / "startup_urls.csv"
+    seeds_csv_path.parent.mkdir(parents=True)
+    seeds_csv_path.write_text(
+        "company_name,website_url\nExample,https://example.com\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STARTUP_FOUNDER_EMAIL_SEEDS_CSV", "data/seeds/startup_urls.csv")
+
+    pipeline_config = load_pipeline_config(tmp_path)
+
+    assert pipeline_config.firecrawl.seeds_csv_path == seeds_csv_path
+    assert pipeline_config.firecrawl.target_urls == ("https://example.com",)
 
 
 def test_read_firecrawl_target_urls_falls_back_to_default_url() -> None:

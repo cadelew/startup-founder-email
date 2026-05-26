@@ -1,0 +1,315 @@
+:root {
+  color-scheme: light;
+  --text-primary: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --bg-page: #f8fafc;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f1f5f9;
+  --border: #e2e8f0;
+  --accent: #2563eb;
+  --accent-text: #ffffff;
+  font-family: Inter, system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg-page);
+  color: var(--text-primary);
+}
+
+#root {
+  color: var(--text-primary);
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+  color: var(--text-primary);
+}
+
+.app h1,
+.app h2,
+.app h3,
+.app p,
+.app strong,
+.app label,
+.app span {
+  color: inherit;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  margin-bottom: 1.5rem;
+}
+
+.app-header p {
+  color: var(--text-secondary);
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tab {
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  padding: 0.5rem 1rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.tab.active {
+  background: var(--text-primary);
+  color: var(--accent-text);
+  border-color: var(--text-primary);
+}
+
+.panel,
+.contacts-panel {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.contacts-panel {
+  margin-top: 0;
+  box-shadow: none;
+}
+
+.contacts-panel--compact {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+}
+
+.contacts-panel h2,
+.contacts-panel h3 {
+  margin-top: 0;
+  color: var(--text-primary);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  color: var(--text-primary);
+}
+
+.field > span {
+  color: var(--text-primary);
+}
+
+textarea,
+input,
+select {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+textarea::placeholder,
+input::placeholder {
+  color: var(--text-muted);
+}
+
+.extraction-options {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-page);
+}
+
+.extraction-options legend {
+  padding: 0 0.35rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.extraction-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.extraction-option:last-child {
+  margin-bottom: 0;
+}
+
+.extraction-option input[type="radio"] {
+  width: auto;
+  margin-top: 0.25rem;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.extraction-option strong {
+  display: block;
+  color: var(--text-primary);
+}
+
+.extraction-option small {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.extraction-option--ai {
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid #93c5fd;
+  background: #eff6ff;
+}
+
+.actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+button,
+.button-link {
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 0.65rem 1rem;
+  border-radius: 8px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  font: inherit;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.job-card {
+  margin-top: 1rem;
+  padding: 1rem;
+  border-radius: 8px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+
+.job-card p {
+  color: var(--text-primary);
+}
+
+.message {
+  margin-top: 1rem;
+  color: var(--text-secondary);
+}
+
+.error {
+  color: #b91c1c;
+}
+
+.csv-path {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.csv-path code {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+.empty-state {
+  color: var(--text-secondary);
+  padding: 1.5rem;
+  background: var(--bg-page);
+  border-radius: 8px;
+  border: 1px dashed #cbd5e1;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  max-height: 70vh;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
+.contacts-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.contacts-table th,
+.contacts-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  max-width: 280px;
+  white-space: normal;
+  word-break: break-word;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.contacts-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-subtle);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+.contacts-table tbody tr:hover td {
+  background: #f8fafc;
+}
+
+.table-input {
+  min-width: 12rem;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+}
+
+.contacts-table a {
+  color: var(--accent);
+}

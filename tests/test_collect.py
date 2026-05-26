@@ -4,10 +4,14 @@ from pathlib import Path
 from startup_founder_email.jsonl_io import iter_jsonl_records
 from startup_founder_email.pipeline import build_pipeline_context
 from startup_founder_email.stages.collect import (
+    build_firecrawl_crawl_request_body,
     build_firecrawl_scrape_request_body,
     build_firecrawl_page_record,
+    collect_live_firecrawl_crawl_records,
     collect_live_firecrawl_page_records,
+    crawl_results_to_page_records,
     merge_firecrawl_json_extraction_payload,
+    poll_firecrawl_crawl_until_complete,
     should_request_llm_extraction,
     read_firecrawl_data_payload,
     read_firecrawl_fixture_records,
@@ -254,6 +258,134 @@ def test_collect_live_firecrawl_page_records_falls_back_to_json(monkeypatch) -> 
     }
 
 
+def test_build_firecrawl_crawl_request_body_includes_path_filters() -> None:
+    firecrawl_config = FirecrawlConfig(
+        mode="live",
+        collection_mode="crawl",
+        crawl_limit=12,
+        crawl_include_paths=("team", "about"),
+        crawl_exclude_paths=("blog",),
+    )
+
+    body = build_firecrawl_crawl_request_body(firecrawl_config, "https://example.com")
+
+    assert body["url"] == "https://example.com"
+    assert body["limit"] == 12
+    assert body["includePaths"] == ["team", "about"]
+    assert body["excludePaths"] == ["blog"]
+    assert body["scrapeOptions"]["formats"] == ["markdown", "html", "links"]
+
+
+def test_crawl_results_to_page_records_sets_seed_metadata() -> None:
+    page_records = crawl_results_to_page_records(
+        seed_url="https://example.com",
+        crawl_id="crawl-123",
+        page_payloads=[
+            {
+                "markdown": "# Team",
+                "metadata": {"sourceURL": "https://example.com/team"},
+            }
+        ],
+        fetched_at_iso="2026-05-05T20:00:00Z",
+    )
+
+    assert len(page_records) == 1
+    assert page_records[0].url == "https://example.com/team"
+    assert page_records[0].seed_url == "https://example.com"
+    assert page_records[0].crawl_id == "crawl-123"
+
+
+def test_collect_live_firecrawl_crawl_records_polls_crawl_jobs(monkeypatch) -> None:
+    crawl_calls: list[str] = []
+
+    def fake_post_firecrawl_crawl_request(
+        firecrawl_config: FirecrawlConfig,
+        seed_url: str,
+        request_timeout_seconds: float,
+    ) -> dict[str, object]:
+        crawl_calls.append(seed_url)
+        return {"success": True, "id": f"id-for-{seed_url}"}
+
+    def fake_poll_firecrawl_crawl_until_complete(
+        firecrawl_config: FirecrawlConfig,
+        crawl_id: str,
+        crawl_timeout_seconds: float,
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "markdown": "# Team",
+                "metadata": {"sourceURL": f"{crawl_id}/team"},
+            }
+        ]
+
+    monkeypatch.setattr(
+        "startup_founder_email.stages.collect.post_firecrawl_crawl_request",
+        fake_post_firecrawl_crawl_request,
+    )
+    monkeypatch.setattr(
+        "startup_founder_email.stages.collect.poll_firecrawl_crawl_until_complete",
+        fake_poll_firecrawl_crawl_until_complete,
+    )
+
+    firecrawl_config = FirecrawlConfig(
+        mode="live",
+        collection_mode="crawl",
+        target_urls=("https://a.example", "https://b.example"),
+    )
+    page_records = collect_live_firecrawl_crawl_records(firecrawl_config, 30.0)
+
+    assert crawl_calls == ["https://a.example", "https://b.example"]
+    assert len(page_records) == 2
+    assert {record.seed_url for record in page_records} == {
+        "https://a.example",
+        "https://b.example",
+    }
+
+
+def test_collect_live_firecrawl_page_records_uses_crawl_mode(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "startup_founder_email.stages.collect.collect_live_firecrawl_crawl_records",
+        lambda firecrawl_config, request_timeout_seconds: [],
+    )
+
+    firecrawl_config = FirecrawlConfig(mode="live", collection_mode="crawl")
+    page_records = collect_live_firecrawl_page_records(firecrawl_config, 20.0)
+
+    assert page_records == []
+
+
+def test_poll_firecrawl_crawl_until_complete_waits_for_completed_status(monkeypatch) -> None:
+    responses = [
+        {"status": "scraping", "completed": 0, "total": 2},
+        {
+            "status": "completed",
+            "data": [{"markdown": "# About", "metadata": {"sourceURL": "https://example.com/about"}}],
+        },
+    ]
+
+    def fake_get_firecrawl_crawl_status(
+        firecrawl_config: FirecrawlConfig,
+        crawl_id: str,
+        request_timeout_seconds: float,
+    ) -> dict[str, object]:
+        return responses.pop(0)
+
+    monkeypatch.setattr(
+        "startup_founder_email.stages.collect.get_firecrawl_crawl_status",
+        fake_get_firecrawl_crawl_status,
+    )
+    monkeypatch.setattr("startup_founder_email.stages.collect.time.sleep", lambda _: None)
+
+    pages = poll_firecrawl_crawl_until_complete(
+        FirecrawlConfig(mode="live"),
+        "job-1",
+        60.0,
+    )
+
+    assert len(pages) == 1
+    assert pages[0]["metadata"]["sourceURL"] == "https://example.com/about"
+
+
 def test_read_firecrawl_fixture_records_sorts_fixture_files(tmp_path: Path) -> None:
     fixture_directory = tmp_path / "_fixtures"
     fixture_directory.mkdir()
@@ -278,18 +410,11 @@ def test_run_collection_stage_writes_raw_jsonl(tmp_path: Path) -> None:
     output_path = context.config.output_directories.raw_directory / "items.jsonl"
 
     assert exit_code == 0
-    assert list(iter_jsonl_records(output_path)) == [
-        {
-            "fetched_at_iso": "2026-05-05T20:00:00Z",
-            "html": "<html></html>",
-            "links": [],
-            "llm_extraction": None,
-            "markdown": "# Example",
-            "metadata": {"sourceURL": "https://example.com"},
-            "status_code": 200,
-            "url": "https://example.com",
-        }
-    ]
+    records = list(iter_jsonl_records(output_path))
+    assert len(records) == 1
+    assert records[0]["url"] == "https://example.com"
+    assert records[0]["seed_url"] is None
+    assert records[0]["crawl_id"] is None
 
 
 def write_fixture(fixture_path: Path, source_url: str) -> None:

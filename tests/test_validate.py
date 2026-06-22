@@ -5,6 +5,10 @@ from startup_founder_email.jsonl_io import iter_jsonl_records, write_jsonl_recor
 from startup_founder_email.models import ContactCandidateRecord
 from startup_founder_email.pipeline import build_pipeline_context
 from startup_founder_email.stages.validate import (
+    adjust_confidence_from_validation,
+    check_domain_a_record,
+    has_free_email_domain,
+    has_short_local_part,
     map_reacher_payload_to_smtp_status,
     choose_email_address_to_validate,
     has_role_local_part,
@@ -185,6 +189,68 @@ def test_run_validation_stage_writes_validated_jsonl(tmp_path: Path) -> None:
     assert exit_code == 0
     assert validated_records[0]["syntax_valid"] is True
     assert validated_records[0]["smtp_probe_status"] == "skipped"
+
+
+def test_has_free_email_domain_detects_free_providers() -> None:
+    free_domains = ("gmail.com", "yahoo.com", "outlook.com")
+    assert has_free_email_domain("john@gmail.com", free_domains) is True
+    assert has_free_email_domain("john@yahoo.com", free_domains) is True
+    assert has_free_email_domain("john@company.com", free_domains) is False
+    assert has_free_email_domain(None, free_domains) is False
+
+
+def test_has_short_local_part_flags_short_usernames() -> None:
+    assert has_short_local_part("ab@example.com", 3) is True
+    assert has_short_local_part("a@example.com", 3) is True
+    assert has_short_local_part("abc@example.com", 3) is False
+    assert has_short_local_part("ada.lovelace@example.com", 3) is False
+    assert has_short_local_part(None, 3) is False
+
+
+def test_check_domain_a_record_resolves_real_domains() -> None:
+    assert check_domain_a_record("google.com", 3.0) is True
+    assert check_domain_a_record("this-domain-does-not-exist-12345.example", 3.0) is False
+
+
+def test_adjust_confidence_downgrades_for_free_email() -> None:
+    result = adjust_confidence_from_validation(
+        "medium", True, False, True, False, False, True, True, "skipped"
+    )
+    assert result == "low"
+
+
+def test_adjust_confidence_downgrades_for_unresolvable_domain() -> None:
+    result = adjust_confidence_from_validation(
+        "medium", True, False, False, False, False, False, False, "skipped"
+    )
+    assert result == "none"
+
+
+def test_adjust_confidence_downgrades_for_short_local_part() -> None:
+    result = adjust_confidence_from_validation(
+        "medium", True, False, False, False, True, True, True, "skipped"
+    )
+    assert result == "low"
+
+
+def test_validate_contact_candidate_detects_free_email_domain() -> None:
+    contact_candidate_record = build_contact_candidate_record(
+        best_email_guess="founder@gmail.com"
+    )
+    validation_config = ValidationConfig(
+        enable_domain_a_record_check=False,
+        free_email_domains=("gmail.com",),
+    )
+
+    validated_record = validate_contact_candidate(
+        contact_candidate_record,
+        validation_config,
+        set(),
+    )
+
+    assert validated_record.is_free_email_domain is True
+    assert "free_email_domain" in validated_record.validation_notes
+    assert validated_record.email_confidence_level == "low"
 
 
 def build_contact_candidate_record(

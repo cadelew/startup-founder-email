@@ -79,11 +79,46 @@ class EmailInferenceConfig:
         "{first}.{last}",
         "{first}{last}",
         "{f}{last}",
+        "{f}.{last}",
+        "{first}_{last}",
         "{first}",
+        "{last}.{first}",
+        "{last}{first}",
+        "{last}{f}",
         "{last}",
         "{first}{l}",
         "{first}.{l}",
+        "{f}{l}",
+        "{f}.{l}",
     )
+
+
+_DEFAULT_FREE_EMAIL_DOMAINS = (
+    "gmail.com",
+    "googlemail.com",
+    "yahoo.com",
+    "yahoo.co.uk",
+    "hotmail.com",
+    "hotmail.co.uk",
+    "outlook.com",
+    "live.com",
+    "msn.com",
+    "aol.com",
+    "icloud.com",
+    "me.com",
+    "mac.com",
+    "mail.com",
+    "protonmail.com",
+    "proton.me",
+    "zoho.com",
+    "yandex.com",
+    "gmx.com",
+    "gmx.net",
+    "fastmail.com",
+    "tutanota.com",
+    "tuta.io",
+    "hey.com",
+)
 
 
 @dataclass(frozen=True)
@@ -92,9 +127,13 @@ class ValidationConfig:
 
     enable_smtp_probe: bool = False
     enable_reacher_http_validation: bool = False
+    enable_domain_a_record_check: bool = True
     reacher_base_url: str = "http://localhost:8080"
     reacher_timeout_seconds: float = 20.0
+    domain_a_record_timeout_seconds: float = 3.0
     disposable_domains_path: Path | None = None
+    free_email_domains: tuple[str, ...] = _DEFAULT_FREE_EMAIL_DOMAINS
+    min_local_part_length: int = 3
     role_local_parts: tuple[str, ...] = (
         "admin",
         "contact",

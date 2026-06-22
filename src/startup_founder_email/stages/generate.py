@@ -81,9 +81,16 @@ def generate_contact_candidate(
     )
     public_email_address = normalized_founder_record.public_email_address
     public_email_source_type = normalized_founder_record.public_email_source_type
+    best_email_guess = choose_best_email_guess(
+        public_email_address,
+        public_email_source_type,
+        inferred_email_addresses,
+    )
     email_source_type = choose_email_source_type(
         public_email_address,
         public_email_source_type,
+        best_email_guess,
+        inferred_email_addresses,
     )
     email_confidence_level = choose_email_confidence_level(
         public_email_address,
@@ -105,11 +112,13 @@ def generate_contact_candidate(
         canonical_company_domain=canonical_company_domain,
         public_email_address=public_email_address,
         public_email_source_type=public_email_source_type,
-        best_email_guess=choose_best_email_guess(
+        best_email_guess=best_email_guess,
+        alternative_email_guess=choose_alternative_email_guess(
             public_email_address,
+            public_email_source_type,
             inferred_email_addresses,
         ),
-        alternative_email_guess=choose_alternative_email_guess(inferred_email_addresses),
+        all_inferred_email_guesses=tuple(inferred_email_addresses),
         email_source_type=email_source_type,
         email_confidence_level=email_confidence_level,
         mx_provider_name=enrichment_record.mx_provider_name if enrichment_record else None,
@@ -178,22 +187,46 @@ def build_email_pattern_tokens(
 
 def choose_best_email_guess(
     public_email_address: str | None,
+    public_email_source_type: str,
     inferred_email_addresses: list[str],
 ) -> str | None:
-    """Choose the best email guess to show in the exported row."""
+    """Choose the best email guess to show in the exported row.
 
-    if public_email_address:
+    Prefers a personal public email (source_type="person") over inferred.
+    When the public email is only company-level (hello@, info@), prefer the
+    first inferred personal email since it targets the founder directly.
+    """
+
+    if public_email_address and public_email_source_type == "person":
         return public_email_address
     if inferred_email_addresses:
         return inferred_email_addresses[0]
+    if public_email_address:
+        return public_email_address
     return None
 
 
-def choose_alternative_email_guess(inferred_email_addresses: list[str]) -> str | None:
-    """Choose the second inferred email guess when present."""
+def choose_alternative_email_guess(
+    public_email_address: str | None,
+    public_email_source_type: str,
+    inferred_email_addresses: list[str],
+) -> str | None:
+    """Choose the second-best email guess.
 
-    if len(inferred_email_addresses) > 1:
-        return inferred_email_addresses[1]
+    When the best guess is an inferred email, the alternative is the next
+    inferred pattern. When the best guess is a personal public email, the
+    first inferred pattern is the alternative.
+    """
+
+    if public_email_address and public_email_source_type == "person":
+        if inferred_email_addresses:
+            return inferred_email_addresses[0]
+        return None
+    if inferred_email_addresses:
+        if len(inferred_email_addresses) > 1:
+            return inferred_email_addresses[1]
+        if public_email_address:
+            return public_email_address
     return None
 
 
@@ -207,21 +240,25 @@ def choose_email_confidence_level(
 
     if public_email_address and public_email_source_type == "person":
         return "high"
-    if public_email_address and public_email_source_type == "company":
-        return "medium"
     if inferred_email_addresses and canonical_company_domain:
         return "medium"
+    if public_email_address and public_email_source_type == "company":
+        return "low"
     return "low"
 
 
 def choose_email_source_type(
     public_email_address: str | None,
     public_email_source_type: str,
+    best_email_guess: str | None,
+    inferred_email_addresses: list[str],
 ) -> str:
     """Choose a source label for the selected email address."""
 
     if public_email_address and public_email_source_type == "person":
         return "public_person"
+    if best_email_guess and best_email_guess in inferred_email_addresses:
+        return "inferred"
     if public_email_address and public_email_source_type == "company":
         return "public_company"
     if public_email_address:

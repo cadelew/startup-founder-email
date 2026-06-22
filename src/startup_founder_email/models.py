@@ -91,7 +91,10 @@ class ContactCandidateRecord:
     all_inferred_email_guesses: tuple[str, ...] = field(default_factory=tuple)
     syntax_valid: bool = False
     is_role_address: bool = False
+    is_free_email_domain: bool = False
     is_disposable_domain: bool = False
+    domain_has_a_record: bool = False
+    local_part_too_short: bool = False
     mx_provider_known: bool = False
     smtp_probe_status: str = "skipped"
     validation_notes: tuple[str, ...] = field(default_factory=tuple)

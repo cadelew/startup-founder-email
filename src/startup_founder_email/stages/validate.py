@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import urllib.error
 import urllib.request
 from dataclasses import replace
@@ -72,8 +73,26 @@ def validate_contact_candidate(
         email_address,
         validation_config.role_local_parts,
     )
+    is_free_email_domain_flag = has_free_email_domain(
+        email_address,
+        validation_config.free_email_domains,
+    )
     is_disposable_domain_flag = has_disposable_domain(email_address, disposable_domains)
+    local_part_too_short_flag = has_short_local_part(
+        email_address,
+        validation_config.min_local_part_length,
+    )
     mx_provider_known = contact_candidate_record.mx_provider_name is not None
+
+    if syntax_valid and email_address and validation_config.enable_domain_a_record_check:
+        domain = email_address.rsplit("@", 1)[1]
+        domain_has_a_record_flag = check_domain_a_record(
+            domain,
+            validation_config.domain_a_record_timeout_seconds,
+        )
+    else:
+        domain_has_a_record_flag = True
+
     smtp_probe_status = "skipped"
     smtp_probe_notes: tuple[str, ...] = ()
 
@@ -96,7 +115,10 @@ def validate_contact_candidate(
     validation_notes = build_validation_notes(
         syntax_valid,
         is_role_address_flag,
+        is_free_email_domain_flag,
         is_disposable_domain_flag,
+        local_part_too_short_flag,
+        domain_has_a_record_flag,
         mx_provider_known,
         smtp_probe_status,
         smtp_probe_notes,
@@ -118,7 +140,10 @@ def validate_contact_candidate(
         contact_candidate_record.email_confidence_level,
         syntax_valid,
         is_role_address_flag,
+        is_free_email_domain_flag,
         is_disposable_domain_flag,
+        local_part_too_short_flag,
+        domain_has_a_record_flag,
         mx_provider_known,
         smtp_probe_status,
     )
@@ -130,7 +155,10 @@ def validate_contact_candidate(
         contact_candidate_record,
         syntax_valid=syntax_valid,
         is_role_address=is_role_address_flag,
+        is_free_email_domain=is_free_email_domain_flag,
         is_disposable_domain=is_disposable_domain_flag,
+        domain_has_a_record=domain_has_a_record_flag,
+        local_part_too_short=local_part_too_short_flag,
         mx_provider_known=mx_provider_known,
         smtp_probe_status=smtp_probe_status,
         validation_notes=validation_notes,
@@ -169,6 +197,18 @@ def has_role_local_part(
     return local_part in set(role_local_parts)
 
 
+def has_free_email_domain(
+    email_address: str | None,
+    free_email_domains: tuple[str, ...],
+) -> bool:
+    """Return whether the email domain is a known free email provider."""
+
+    if not email_address or "@" not in email_address:
+        return False
+    domain = email_address.rsplit("@", 1)[1].lower()
+    return domain in set(free_email_domains)
+
+
 def has_disposable_domain(
     email_address: str | None,
     disposable_domains: set[str],
@@ -181,10 +221,39 @@ def has_disposable_domain(
     return domain in disposable_domains
 
 
+def has_short_local_part(
+    email_address: str | None,
+    min_length: int,
+) -> bool:
+    """Return whether the email local part is suspiciously short."""
+
+    if not email_address or "@" not in email_address:
+        return False
+    local_part = email_address.split("@", 1)[0]
+    return len(local_part) < min_length
+
+
+def check_domain_a_record(domain: str, timeout_seconds: float) -> bool:
+    """Return whether the domain resolves to at least one A/AAAA record."""
+
+    original_timeout = socket.getdefaulttimeout()
+    try:
+        socket.setdefaulttimeout(timeout_seconds)
+        socket.getaddrinfo(domain, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        return True
+    except (socket.gaierror, OSError):
+        return False
+    finally:
+        socket.setdefaulttimeout(original_timeout)
+
+
 def build_validation_notes(
     syntax_valid: bool,
     is_role_address: bool,
+    is_free_email_domain: bool,
     is_disposable_domain: bool,
+    local_part_too_short: bool,
+    domain_has_a_record: bool,
     mx_provider_known: bool,
     smtp_probe_status: str,
     smtp_probe_notes: tuple[str, ...] = (),
@@ -196,8 +265,14 @@ def build_validation_notes(
         validation_notes.append("invalid_syntax")
     if is_role_address:
         validation_notes.append("role_address")
+    if is_free_email_domain:
+        validation_notes.append("free_email_domain")
     if is_disposable_domain:
         validation_notes.append("disposable_domain")
+    if local_part_too_short:
+        validation_notes.append("local_part_too_short")
+    if not domain_has_a_record and syntax_valid:
+        validation_notes.append("domain_not_resolvable")
     if not mx_provider_known:
         validation_notes.append("mx_unknown_offline")
     if smtp_probe_status == "skipped":
@@ -210,7 +285,10 @@ def adjust_confidence_from_validation(
     current_confidence: str,
     syntax_valid: bool,
     is_role_address: bool,
+    is_free_email_domain: bool,
     is_disposable_domain: bool,
+    local_part_too_short: bool,
+    domain_has_a_record: bool,
     mx_provider_known: bool,
     smtp_probe_status: str,
 ) -> str:
@@ -220,15 +298,23 @@ def adjust_confidence_from_validation(
         return "none"
     if is_disposable_domain:
         return "none"
+    if not domain_has_a_record:
+        return "none"
     if smtp_probe_status == "undeliverable":
         return "none"
+    if is_free_email_domain:
+        return "low"
 
+    if local_part_too_short and current_confidence in ("high", "medium"):
+        return "low"
     if is_role_address and current_confidence in ("high", "medium"):
         return "low"
     if not mx_provider_known and current_confidence == "high":
         return "medium"
     if smtp_probe_status == "deliverable" and current_confidence == "medium":
         return "high"
+    if domain_has_a_record and mx_provider_known and current_confidence == "medium":
+        return "medium"
 
     return current_confidence
 
@@ -351,7 +437,10 @@ def read_contact_candidate_records(
             ),
             syntax_valid=bool(record.get("syntax_valid")),
             is_role_address=bool(record.get("is_role_address")),
+            is_free_email_domain=bool(record.get("is_free_email_domain")),
             is_disposable_domain=bool(record.get("is_disposable_domain")),
+            domain_has_a_record=bool(record.get("domain_has_a_record")),
+            local_part_too_short=bool(record.get("local_part_too_short")),
             mx_provider_known=bool(record.get("mx_provider_known")),
             smtp_probe_status=str(record.get("smtp_probe_status", "skipped")),
             validation_notes=tuple(read_string_items(record.get("validation_notes"))),

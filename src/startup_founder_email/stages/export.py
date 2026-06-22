@@ -23,6 +23,7 @@ EXPORT_COLUMNS: tuple[str, ...] = (
     "public_email_source_type",
     "best_email_guess",
     "alternative_email_guess",
+    "all_inferred_email_guesses",
     "email_source_type",
     "email_confidence_level",
     "syntax_valid",
@@ -115,6 +116,9 @@ def read_validated_contact_candidate_records(
             mx_provider_name=read_optional_string(record.get("mx_provider_name")),
             founder_linkedin_url=read_optional_string(record.get("founder_linkedin_url")),
             source_url=str(record.get("source_url", "")),
+            all_inferred_email_guesses=tuple(
+                read_string_items(record.get("all_inferred_email_guesses"))
+            ),
             syntax_valid=bool(record.get("syntax_valid")),
             is_role_address=bool(record.get("is_role_address")),
             is_disposable_domain=bool(record.get("is_disposable_domain")),

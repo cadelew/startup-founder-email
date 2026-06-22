@@ -79,10 +79,17 @@ class EmailInferenceConfig:
         "{first}.{last}",
         "{first}{last}",
         "{f}{last}",
+        "{f}.{last}",
+        "{first}_{last}",
         "{first}",
+        "{last}.{first}",
+        "{last}{first}",
+        "{last}{f}",
         "{last}",
         "{first}{l}",
         "{first}.{l}",
+        "{f}{l}",
+        "{f}.{l}",
     )
 
 

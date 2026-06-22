@@ -68,11 +68,11 @@ def validate_contact_candidate(
 
     email_address = choose_email_address_to_validate(contact_candidate_record)
     syntax_valid = is_syntax_valid(email_address)
-    is_role_address = has_role_local_part(
+    is_role_address_flag = has_role_local_part(
         email_address,
         validation_config.role_local_parts,
     )
-    is_disposable_domain = has_disposable_domain(email_address, disposable_domains)
+    is_disposable_domain_flag = has_disposable_domain(email_address, disposable_domains)
     mx_provider_known = contact_candidate_record.mx_provider_name is not None
     smtp_probe_status = "skipped"
     smtp_probe_notes: tuple[str, ...] = ()
@@ -88,13 +88,39 @@ def validate_contact_candidate(
             smtp_probe_status = "error"
             smtp_probe_notes = ("smtp_probe_http_error",)
 
+    alt_email = contact_candidate_record.alternative_email_guess
+    alt_syntax_valid = is_syntax_valid(alt_email)
+    alt_is_role = has_role_local_part(alt_email, validation_config.role_local_parts)
+    alt_is_disposable = has_disposable_domain(alt_email, disposable_domains)
+
     validation_notes = build_validation_notes(
         syntax_valid,
-        is_role_address,
-        is_disposable_domain,
+        is_role_address_flag,
+        is_disposable_domain_flag,
         mx_provider_known,
         smtp_probe_status,
         smtp_probe_notes,
+    )
+
+    if alt_email and alt_syntax_valid and not alt_is_role and not alt_is_disposable:
+        validation_notes = validation_notes + ("alt_email_syntax_ok",)
+    elif alt_email and (not alt_syntax_valid or alt_is_role or alt_is_disposable):
+        alt_issues: list[str] = []
+        if not alt_syntax_valid:
+            alt_issues.append("alt_invalid_syntax")
+        if alt_is_role:
+            alt_issues.append("alt_role_address")
+        if alt_is_disposable:
+            alt_issues.append("alt_disposable_domain")
+        validation_notes = validation_notes + tuple(alt_issues)
+
+    adjusted_confidence = adjust_confidence_from_validation(
+        contact_candidate_record.email_confidence_level,
+        syntax_valid,
+        is_role_address_flag,
+        is_disposable_domain_flag,
+        mx_provider_known,
+        smtp_probe_status,
     )
 
     if validation_config.enable_smtp_probe:
@@ -103,11 +129,12 @@ def validate_contact_candidate(
     return replace(
         contact_candidate_record,
         syntax_valid=syntax_valid,
-        is_role_address=is_role_address,
-        is_disposable_domain=is_disposable_domain,
+        is_role_address=is_role_address_flag,
+        is_disposable_domain=is_disposable_domain_flag,
         mx_provider_known=mx_provider_known,
         smtp_probe_status=smtp_probe_status,
         validation_notes=validation_notes,
+        email_confidence_level=adjusted_confidence,
     )
 
 
@@ -177,6 +204,33 @@ def build_validation_notes(
         validation_notes.append("smtp_skipped_offline")
     validation_notes.extend(smtp_probe_notes)
     return tuple(validation_notes)
+
+
+def adjust_confidence_from_validation(
+    current_confidence: str,
+    syntax_valid: bool,
+    is_role_address: bool,
+    is_disposable_domain: bool,
+    mx_provider_known: bool,
+    smtp_probe_status: str,
+) -> str:
+    """Downgrade confidence level when validation flags indicate problems."""
+
+    if not syntax_valid:
+        return "none"
+    if is_disposable_domain:
+        return "none"
+    if smtp_probe_status == "undeliverable":
+        return "none"
+
+    if is_role_address and current_confidence in ("high", "medium"):
+        return "low"
+    if not mx_provider_known and current_confidence == "high":
+        return "medium"
+    if smtp_probe_status == "deliverable" and current_confidence == "medium":
+        return "high"
+
+    return current_confidence
 
 
 def probe_reacher_http_validation(
@@ -292,6 +346,9 @@ def read_contact_candidate_records(
             mx_provider_name=read_optional_string(record.get("mx_provider_name")),
             founder_linkedin_url=read_optional_string(record.get("founder_linkedin_url")),
             source_url=str(record.get("source_url", "")),
+            all_inferred_email_guesses=tuple(
+                read_string_items(record.get("all_inferred_email_guesses"))
+            ),
             syntax_valid=bool(record.get("syntax_valid")),
             is_role_address=bool(record.get("is_role_address")),
             is_disposable_domain=bool(record.get("is_disposable_domain")),

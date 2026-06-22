@@ -88,6 +88,7 @@ class ContactCandidateRecord:
     mx_provider_name: str | None
     founder_linkedin_url: str | None
     source_url: str
+    all_inferred_email_guesses: tuple[str, ...] = field(default_factory=tuple)
     syntax_valid: bool = False
     is_role_address: bool = False
     is_disposable_domain: bool = False

@@ -54,7 +54,25 @@ def test_infer_email_addresses_uses_configured_patterns() -> None:
     ]
 
 
-def test_generate_contact_candidate_prefers_public_email() -> None:
+def test_generate_contact_candidate_prefers_personal_public_email() -> None:
+    normalized_founder_record = build_normalized_founder_record(
+        public_email_address="ada@example.com",
+        public_email_source_type="person",
+    )
+    enrichment_record = build_enrichment_record()
+
+    contact_candidate_record = generate_contact_candidate(
+        normalized_founder_record,
+        enrichment_record,
+        EmailInferenceConfig(),
+    )
+
+    assert contact_candidate_record.best_email_guess == "ada@example.com"
+    assert contact_candidate_record.email_source_type == "public_person"
+    assert contact_candidate_record.email_confidence_level == "high"
+
+
+def test_generate_contact_candidate_prefers_inferred_over_company_email() -> None:
     normalized_founder_record = build_normalized_founder_record(
         public_email_address="hello@example.com",
         public_email_source_type="company",
@@ -67,9 +85,12 @@ def test_generate_contact_candidate_prefers_public_email() -> None:
         EmailInferenceConfig(),
     )
 
-    assert contact_candidate_record.best_email_guess == "hello@example.com"
-    assert contact_candidate_record.email_source_type == "public_company"
+    assert contact_candidate_record.best_email_guess == "ada.lovelace@example.com"
+    assert contact_candidate_record.alternative_email_guess == "adalovelace@example.com"
+    assert contact_candidate_record.email_source_type == "inferred"
     assert contact_candidate_record.email_confidence_level == "medium"
+    assert contact_candidate_record.public_email_address == "hello@example.com"
+    assert len(contact_candidate_record.all_inferred_email_guesses) > 2
 
 
 def test_generate_contact_candidates_matches_enrichment_by_company_and_url() -> None:
